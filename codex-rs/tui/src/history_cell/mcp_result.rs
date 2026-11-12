@@ -6,6 +6,8 @@
 use crate::text_formatting::format_json_compact;
 use base64::Engine;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::Role;
+use codex_protocol::mcp::content_block_is_for;
 use image::DynamicImage;
 use image::ImageReader;
 use rmcp::model::ContentBlock;
@@ -54,6 +56,7 @@ impl McpToolResult {
         let content = result
             .content
             .into_iter()
+            .filter(|block| content_block_is_for(block, Role::User))
             .map(|block| {
                 // Deserialize by reference so malformed blocks remain available for the exact
                 // JSON fallback. Successful blocks no longer retain their wire representation.

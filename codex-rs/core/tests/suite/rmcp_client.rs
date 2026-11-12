@@ -3282,6 +3282,137 @@ async fn stdio_encrypted_content_responses_round_trip() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
+async fn stdio_user_audience_content_never_reaches_the_model() -> anyhow::Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    skip_if_no_network!(Ok(()));
+
+    const USER_ONLY: &str = "W1a2b3c4d";
+    let server = responses::start_mock_server().await;
+    let call_id = "audience-1";
+    let server_name = "rmcp";
+    let namespace = format!("mcp__{server_name}");
+    let assistant_reply = |id: &str| {
+        responses::sse(vec![
+            responses::ev_assistant_message(&format!("msg-{id}"), "done"),
+            responses::ev_completed(&format!("resp-{id}")),
+        ])
+    };
+    let request_log = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-call"),
+                responses::ev_function_call_with_namespace(
+                    call_id,
+                    &namespace,
+                    "audience_output",
+                    "{}",
+                ),
+                responses::ev_completed("resp-call"),
+            ]),
+            assistant_reply("same-turn"),
+            assistant_reply("next-turn"),
+            assistant_reply("resumed"),
+            assistant_reply("compact"),
+            assistant_reply("compacted"),
+        ],
+    )
+    .await;
+
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+    let model_provider = super::compact::non_openai_model_provider(&server);
+    let configure = move |config: &mut Config| {
+        config.model_provider = model_provider;
+        insert_mcp_server(
+            config,
+            server_name,
+            stdio_transport(
+                rmcp_test_server_bin,
+                Some(HashMap::from([(
+                    "MCP_TEST_USER_AUDIENCE_TEXT".to_string(),
+                    USER_ONLY.to_string(),
+                )])),
+                Vec::new(),
+            ),
+            TestMcpServerOptions {
+                environment_id: remote_aware_environment_id(),
+                ..Default::default()
+            },
+        );
+    };
+    let fixture = test_codex()
+        .with_config(configure.clone())
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
+    fixture
+        .codex
+        .start_or_steer_turn(read_only_user_turn(&fixture, "call the audience tool"))
+        .await?;
+    let end = core_test_support::wait_for_event_match(&fixture.codex, |event| match event {
+        EventMsg::McpToolCallEnd(end) => Some(end.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    assert!(
+        serde_json::to_string(&end.result)?.contains(USER_ONLY),
+        "the user-facing event should keep the user-only block"
+    );
+
+    fixture
+        .codex
+        .start_or_steer_turn(read_only_user_turn(&fixture, "next turn"))
+        .await?;
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let fixture = test_codex()
+        .with_config(configure)
+        .restart_with_auto_env(&server, &fixture)
+        .await?;
+    fixture
+        .codex
+        .start_or_steer_turn(read_only_user_turn(&fixture, "resumed turn"))
+        .await?;
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    fixture.codex.submit(Op::Compact).await?;
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    fixture
+        .codex
+        .start_or_steer_turn(read_only_user_turn(&fixture, "after compaction"))
+        .await?;
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 6);
+    let output = requests[1].function_call_output(call_id);
+    assert_eq!(
+        output["output"]
+            .as_array()
+            .expect("MCP output should be content items")[1..],
+        [json!({"type": "input_text", "text": "Lookup completed"})]
+    );
+    // Both replay the tool output, so the code word's absence there shows filtering rather
+    // than lost history.
+    for request in [&requests[3], &requests[4]] {
+        assert!(request.body_contains_text("Lookup completed"));
+    }
+    for (index, request) in requests.iter().enumerate() {
+        assert!(
+            !request.body_contains_text(USER_ONLY),
+            "request {index} sent the user-only block to the model"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
 async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(

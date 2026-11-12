@@ -6,6 +6,8 @@ use super::ImageDetail;
 use super::ImageReference;
 use crate::mcp::Resource;
 use crate::mcp::ResourceContent;
+use crate::mcp::Role;
+use crate::mcp::content_block_is_for;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -91,6 +93,7 @@ pub(super) fn convert_mcp_content_to_items(
 ) -> Vec<FunctionCallOutputContentItem> {
     contents
         .iter()
+        .filter(|block| content_block_is_for(block, Role::Assistant))
         .map(|block| {
             FunctionCallOutputContentItem::from_mcp_content_block(block).unwrap_or_else(|_| {
                 FunctionCallOutputContentItem::InputText {

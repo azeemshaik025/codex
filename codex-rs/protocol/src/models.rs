@@ -3668,6 +3668,37 @@ mod tests {
     }
 
     #[test]
+    fn omits_mcp_content_whose_audience_excludes_the_model() {
+        let call_tool_result = CallToolResult {
+            content: vec![
+                serde_json::json!({"type":"text","text":"user","annotations":{"audience":["user"]}}),
+                serde_json::json!({"type":"image","data":"Zm9v","mimeType":"image/png","annotations":{"audience":["user"]}}),
+                serde_json::json!({"type":"text","text":"assistant","annotations":{"audience":["assistant"]}}),
+                serde_json::json!({"type":"text","text":"both","annotations":{"audience":["user","assistant"],"priority":0.5}}),
+                serde_json::json!({"type":"text","text":"priority only","annotations":{"priority":0.5}}),
+                serde_json::json!({"type":"text","text":"plain"}),
+            ],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        assert_eq!(
+            call_tool_result.as_function_call_output_payload(),
+            FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(
+                    ["assistant", "both", "priority only", "plain"]
+                        .map(|text| FunctionCallOutputContentItem::InputText {
+                            text: text.to_string(),
+                        })
+                        .to_vec(),
+                ),
+                success: Some(true),
+            }
+        );
+    }
+
+    #[test]
     fn preserves_structured_mcp_content() {
         let call_tool_result = CallToolResult {
             content: vec![serde_json::json!({"type":"text","text":"ignored"})],

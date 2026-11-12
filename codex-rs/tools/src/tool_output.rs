@@ -1,3 +1,5 @@
+use codex_protocol::mcp::Role;
+use codex_protocol::mcp::content_block_is_for;
 use codex_protocol::models::AudioReference;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -222,9 +224,12 @@ impl ToolOutput for codex_protocol::mcp::CallToolResult {
         let mut result = serde_json::to_value(self).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize mcp result: {err}"))
         });
-        // MCP result metadata is private to clients and must not reach Code Mode.
+        // MCP result metadata and user-only content must not reach Code Mode.
         if let JsonValue::Object(fields) = &mut result {
             fields.remove("_meta");
+            if let Some(JsonValue::Array(content)) = fields.get_mut("content") {
+                content.retain(|block| content_block_is_for(block, Role::Assistant));
+            }
         }
         result
     }

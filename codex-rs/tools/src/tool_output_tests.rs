@@ -4,7 +4,10 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
 use pretty_assertions::assert_eq;
 
+use super::ToolOutput;
 use super::response_input_to_code_mode_result;
+use crate::ToolPayload;
+use codex_protocol::mcp::CallToolResult;
 
 #[test]
 fn code_mode_text_preserves_message_content() {
@@ -50,5 +53,34 @@ fn code_mode_text_preserves_message_content() {
         serde_json::json!(
             "Input text\nOutput text\nfile_123\ndata:image/png;base64,abc\ndata:audio/wav;base64,def\nfile_audio"
         )
+    );
+}
+
+#[test]
+fn mcp_code_mode_result_omits_content_whose_audience_excludes_the_model() {
+    let result = CallToolResult {
+        content: vec![
+            serde_json::json!({"type": "text", "text": "user", "annotations": {"audience": ["user"]}}),
+            serde_json::json!({"type": "text", "text": "assistant", "annotations": {"audience": ["assistant"]}}),
+            serde_json::json!({"type": "text", "text": "plain"}),
+        ],
+        structured_content: None,
+        is_error: Some(false),
+        meta: None,
+    };
+
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+
+    assert_eq!(
+        result.code_mode_result(&payload),
+        serde_json::json!({
+            "content": [
+                {"type": "text", "text": "assistant", "annotations": {"audience": ["assistant"]}},
+                {"type": "text", "text": "plain"},
+            ],
+            "isError": false,
+        })
     );
 }

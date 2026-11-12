@@ -11,6 +11,7 @@ use std::time::Duration;
 use rmcp::ErrorData as McpError;
 use rmcp::ServiceExt;
 use rmcp::handler::server::ServerHandler;
+use rmcp::model::Annotations;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::ContentBlock;
@@ -33,8 +34,10 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::Resource;
 use rmcp::model::ResourceContents;
 use rmcp::model::ResourceTemplate;
+use rmcp::model::Role;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerConfig;
+use rmcp::model::TextContent;
 use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
@@ -63,6 +66,7 @@ const INITIALIZE_BARRIER_FILE_ENV: &str = "MCP_TEST_INITIALIZE_BARRIER_FILE";
 const SERVER_INSTRUCTIONS_ENV: &str = "MCP_TEST_SERVER_INSTRUCTIONS";
 
 const LEASE_EVENTS_FILE_ENV: &str = "MCP_TEST_LEASE_EVENTS_FILE";
+const USER_AUDIENCE_TEXT_ENV: &str = "MCP_TEST_USER_AUDIENCE_TEXT";
 
 /// Record only the lease protocol for the app-server unload regression.
 fn record_lease_event(method: &str, id: &serde_json::Value) -> Result<(), McpError> {
@@ -172,6 +176,22 @@ impl TestToolServer {
             sandbox_meta_tool,
         ];
         tools.extend(entitlement_tools);
+        if std::env::var_os(USER_AUDIENCE_TEXT_ENV).is_some() {
+            #[expect(clippy::expect_used)]
+            let schema: JsonObject = serde_json::from_value(json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }))
+            .expect("audience_output tool schema should deserialize");
+            let mut tool = Tool::new(
+                Cow::Borrowed("audience_output"),
+                Cow::Borrowed("Return one user-only and one unannotated text block."),
+                Arc::new(schema),
+            );
+            tool.annotations = Some(ToolAnnotations::new().read_only(true));
+            tools.push(tool);
+        }
         if std::env::var_os("MCP_TEST_ENABLE_NODE_REPL_JS").is_some() {
             #[expect(clippy::expect_used)]
             let schema: JsonObject = serde_json::from_value(json!({
@@ -902,6 +922,19 @@ impl ServerHandler for TestToolServer {
                 ]);
                 result.structured_content = Some(json!({"encrypted_output": "ignored"}));
                 Ok(result)
+            }
+            "audience_output" => {
+                let user_text = std::env::var(USER_AUDIENCE_TEXT_ENV).map_err(|_| {
+                    McpError::invalid_params(
+                        "missing MCP_TEST_USER_AUDIENCE_TEXT env var for audience_output tool",
+                        None,
+                    )
+                })?;
+                let user_only = Annotations::default().with_audience(vec![Role::User]);
+                Ok(CallToolResult::success(vec![
+                    ContentBlock::Text(TextContent::new(user_text).with_annotations(user_only)),
+                    ContentBlock::text("Lookup completed"),
+                ]))
             }
             "image" => {
                 // Read a data URL (e.g. data:image/png;base64,AAA...) from env and convert to

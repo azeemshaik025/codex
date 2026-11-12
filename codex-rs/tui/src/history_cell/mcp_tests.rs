@@ -385,6 +385,29 @@ fn projected_content_preserves_full_rendering() {
 }
 
 #[test]
+fn projected_content_omits_blocks_whose_audience_excludes_the_user() {
+    let projected = McpToolResult::new(
+        result(vec![
+            json!({"type": "text", "text": "user", "annotations": {"audience": ["user"]}}),
+            json!({"type": "text", "text": "assistant", "annotations": {"audience": ["assistant"]}}),
+            json!({"type": "image", "mimeType": "image/png", "data": PNG, "annotations": {"audience": ["assistant"]}}),
+            json!({"type": "text", "text": "plain"}),
+        ]),
+        McpResultKind::Standard,
+    );
+
+    assert_eq!(
+        projected
+            .content
+            .iter()
+            .map(result::McpContentBlock::render)
+            .collect::<Vec<_>>(),
+        vec!["user", "plain"],
+    );
+    assert!(!projected.has_image);
+}
+
+#[test]
 fn projected_image_marker_still_requires_a_complete_image() {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(PNG)

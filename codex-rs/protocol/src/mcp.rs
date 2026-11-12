@@ -376,6 +376,30 @@ pub fn plain_output_text(block: &serde_json::Value) -> Option<&str> {
     Some(text)
 }
 
+/// A party that MCP content can be addressed to through `annotations.audience`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Role {
+    User,
+    Assistant,
+}
+
+/// JSON Pointer (RFC 6901) to the audience list of an MCP content block.
+const CONTENT_AUDIENCE_POINTER: &str = "/annotations/audience";
+
+/// Returns whether an MCP content block is addressed to `role`. A block without an
+/// `annotations.audience` list is addressed to every role.
+pub fn content_block_is_for(block: &serde_json::Value, role: Role) -> bool {
+    block
+        .pointer(CONTENT_AUDIENCE_POINTER)
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(|audience| {
+            audience
+                .iter()
+                .any(|entry| Role::deserialize(entry).is_ok_and(|entry| entry == role))
+        })
+}
+
 // === Adapter helpers ===
 //
 // These types and conversions intentionally live in `codex-protocol` so other crates can convert
@@ -553,6 +577,32 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn content_block_is_for_roles_listed_in_audience() {
+        use serde_json::json;
+
+        for (annotations, for_user, for_assistant) in [
+            (json!({}), true, true),
+            (json!({"priority": 0.5}), true, true),
+            (json!({"audience": ["user"]}), true, false),
+            (json!({"audience": ["assistant"]}), false, true),
+            (json!({"audience": ["user", "assistant"]}), true, true),
+            (json!({"audience": ["user", "system"]}), true, false),
+            (json!({"audience": []}), false, false),
+            (json!({"audience": "user"}), true, true),
+        ] {
+            let block = json!({"type": "text", "text": "hi", "annotations": annotations});
+            assert_eq!(
+                (
+                    content_block_is_for(&block, Role::User),
+                    content_block_is_for(&block, Role::Assistant),
+                ),
+                (for_user, for_assistant),
+                "{annotations}"
+            );
+        }
+    }
 
     #[test]
     fn node_repl_backed_tool_recognizes_namespaces_and_legacy_names() {
